@@ -949,7 +949,7 @@ namespace VAMEZSoftBones
                 EZSoftBoneBoneCollider proxy = bone.collisionProxies[i];
                 if (proxy == null) continue;
                 if (!proxy.enabled || !proxy.gameObject.activeInHierarchy) continue;
-                if (proxy.radius <= 0f || proxy.weight <= 0f) continue;
+                if (proxy.radius <= 0f) continue;
                 return true;
             }
 
