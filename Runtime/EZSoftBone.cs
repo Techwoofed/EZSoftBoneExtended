@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
-namespace EZhex1991.EZSoftBone
+namespace VAMEZSoftBones
 {
     public delegate Vector3 CustomForce(float normalizedLength);
 
@@ -59,7 +59,19 @@ namespace EZhex1991.EZSoftBone
             public float resistance;
             public float slackness;
 
+            //Techwoof: Cache for the flickering workaround
+            public Vector3 solvedLocalPosition;
+            public Quaternion solvedLocalRotation;
+            public bool hasSolvedPose;
+
+            public Vector3 renderBackupLocalPosition;
+            public Quaternion renderBackupLocalRotation;
+            public bool hasRenderBackup;
+
             public Vector3 speed;
+
+            // Cached authoring components. Multiple proxies may be attached to one bone.
+            public EZSoftBoneBoneCollider[] collisionProxies;
 
             public Bone(Transform systemSpace, Transform transform, IEnumerable<Transform> endBones, int startDepth, int depth, float nodeLength, float boneLength)
             {
@@ -69,6 +81,7 @@ namespace EZhex1991.EZSoftBone
                 systemPosition = systemSpace == null ? worldPosition : systemSpace.InverseTransformPoint(worldPosition);
                 localPosition = transform.localPosition;
                 localRotation = transform.localRotation;
+                collisionProxies = transform.GetComponents<EZSoftBoneBoneCollider>();
                 this.depth = depth;
                 if (depth > startDepth)
                 {
@@ -219,6 +232,83 @@ namespace EZhex1991.EZSoftBone
                     childBones[i].UpdateSpace();
                 }
             }
+
+            public void RefreshCollisionProxies()
+            {
+                collisionProxies = transform.GetComponents<EZSoftBoneBoneCollider>();
+                for (int i = 0; i < childBones.Count; i++)
+                {
+                    childBones[i].RefreshCollisionProxies();
+                }
+            }
+
+            //techwoof: Cached pose workaround
+            public bool CacheSolvedPose(int startDepth)
+            {
+                bool cachedAny = false;
+
+                if (depth > startDepth)
+                {
+                    solvedLocalPosition = transform.localPosition;
+                    solvedLocalRotation = transform.localRotation;
+                    hasSolvedPose = true;
+                    cachedAny = true;
+                }
+
+                for (int i = 0; i < childBones.Count; i++)
+                {
+                    if (childBones[i].CacheSolvedPose(startDepth))
+                    {
+                        cachedAny = true;
+                    }
+                }
+
+                return cachedAny;
+            }
+
+            public void BackupRenderPose(int startDepth)
+            {
+                if (depth > startDepth && hasSolvedPose)
+                {
+                    renderBackupLocalPosition = transform.localPosition;
+                    renderBackupLocalRotation = transform.localRotation;
+                    hasRenderBackup = true;
+                }
+
+                for (int i = 0; i < childBones.Count; i++)
+                {
+                    childBones[i].BackupRenderPose(startDepth);
+                }
+            }
+
+            public void ApplySolvedPose(int startDepth)
+            {
+                if (depth > startDepth && hasSolvedPose)
+                {
+                    transform.localPosition = solvedLocalPosition;
+                    transform.localRotation = solvedLocalRotation;
+                }
+
+                for (int i = 0; i < childBones.Count; i++)
+                {
+                    childBones[i].ApplySolvedPose(startDepth);
+                }
+            }
+
+            public void RestoreRenderPose(int startDepth)
+            {
+                if (depth > startDepth && hasRenderBackup)
+                {
+                    transform.localPosition = renderBackupLocalPosition;
+                    transform.localRotation = renderBackupLocalRotation;
+                    hasRenderBackup = false;
+                }
+
+                for (int i = 0; i < childBones.Count; i++)
+                {
+                    childBones[i].RestoreRenderPose(startDepth);
+                }
+            }
         }
 
         [SerializeField]
@@ -280,18 +370,99 @@ namespace EZhex1991.EZSoftBone
         #endregion
 
         #region Collision
+        //Techwoof: We add VAM's layer to the default value.
+        //26: Extremities (hand, feet, head), 29: Body (torso, limbs)
+        private const int LegacyDefaultCollisionMask = 1 << 0;
+        private const int DefaultCollisionMask =
+            (1 << 0) |
+            (1 << 26) |
+            (1 << 29);
+
         [SerializeField]
-        private LayerMask m_CollisionLayers = 1;
+        private LayerMask m_CollisionLayers = DefaultCollisionMask;
         public LayerMask collisionLayers { get { return m_CollisionLayers; } set { m_CollisionLayers = value; } }
+
         [SerializeField]
         private List<Collider> m_ExtraColliders = new List<Collider>();
         public List<Collider> extraColliders { get { return m_ExtraColliders; } }
+
         [SerializeField]
         private float m_Radius = 0;
-        public float radius { get { return m_Radius; } set { m_Radius = value; } }
+        public float radius { get { return m_Radius; } set { m_Radius = Mathf.Max(0f, value); } }
+
         [SerializeField, EZCurveRect(0, 0, 1, 1)]
         private AnimationCurve m_RadiusCurve = AnimationCurve.Linear(0, 1, 1, 1);
         public AnimationCurve radiusCurve { get { return m_RadiusCurve; } }
+
+        [SerializeField]
+        private bool m_UseCompoundBoneColliders = true;
+        public bool useCompoundBoneColliders { get { return m_UseCompoundBoneColliders; } set { m_UseCompoundBoneColliders = value; } }
+
+        [SerializeField]
+        private bool m_CollideWithNativeColliders = false;
+        public bool collideWithNativeColliders { get { return m_CollideWithNativeColliders; } set { m_CollideWithNativeColliders = value; } }
+
+        [SerializeField, Range(1, 256)]
+        private int m_NativeColliderBufferSize = 64;
+        public int nativeColliderBufferSize
+        {
+            get { return m_NativeColliderBufferSize; }
+            set
+            {
+                m_NativeColliderBufferSize = Mathf.Clamp(value, 1, 256);
+                EnsureNativeColliderBuffer();
+            }
+        }
+
+        [SerializeField, Range(0f, 0.01f)]
+        private float m_NativeCollisionSkin = 0.001f;
+
+        public float nativeCollisionSkin
+        {
+            get { return m_NativeCollisionSkin; }
+            set { m_NativeCollisionSkin = Mathf.Max(0f, value); }
+        }
+
+        [SerializeField]
+        private bool m_SyncNativeColliderTransforms = true;
+
+        private static int s_LastPhysicsSyncFrame = -1;
+
+        [SerializeField, Range(0f, 1f)]
+        private float m_CollisionFeedback = 0.35f;
+        public float collisionFeedback { get { return m_CollisionFeedback; } set { m_CollisionFeedback = Mathf.Clamp01(value); } }
+
+        [SerializeField, Range(0f, 1f)]
+        private float m_CollisionFeedbackFalloff = 0.55f;
+        public float collisionFeedbackFalloff { get { return m_CollisionFeedbackFalloff; } set { m_CollisionFeedbackFalloff = Mathf.Clamp01(value); } }
+
+        [SerializeField, Range(0, 8)]
+        private int m_CollisionFeedbackDepth = 3;
+        public int collisionFeedbackDepth { get { return m_CollisionFeedbackDepth; } set { m_CollisionFeedbackDepth = Mathf.Max(0, value); } }
+
+        [SerializeField, Range(0f, 1f)]
+        private float m_BackwardConstraintStrength = 0.35f;
+        public float backwardConstraintStrength { get { return m_BackwardConstraintStrength; } set { m_BackwardConstraintStrength = Mathf.Clamp01(value); } }
+
+        [SerializeField, Range(0, 4)]
+        private int m_BackwardConstraintPasses = 1;
+        public int backwardConstraintPasses { get { return m_BackwardConstraintPasses; } set { m_BackwardConstraintPasses = Mathf.Max(0, value); } }
+
+        [SerializeField, Range(0f, 1f)]
+        private float m_ChildOrientationFollow = 0.75f;
+        public float childOrientationFollow { get { return m_ChildOrientationFollow; } set { m_ChildOrientationFollow = Mathf.Clamp01(value); } }
+
+        [SerializeField, Range(0f, 1f)]
+        private float m_CollisionChildOrientationFollow = 0.75f;
+        public float collisionChildOrientationFollow { get { return m_CollisionChildOrientationFollow; } set { m_CollisionChildOrientationFollow = Mathf.Clamp01(value); } }
+
+        [SerializeField, Range(0f, 1f)]
+        private float m_CollisionChildOrientationFalloff = 0.9f;
+        public float collisionChildOrientationFalloff { get { return m_CollisionChildOrientationFalloff; } set { m_CollisionChildOrientationFalloff = Mathf.Clamp01(value); } }
+
+        [SerializeField, Range(0, 16)]
+        private int m_CollisionChildOrientationDepth = 8;
+        public int collisionChildOrientationDepth { get { return m_CollisionChildOrientationDepth; } set { m_CollisionChildOrientationDepth = Mathf.Max(0, value); } }
         #endregion
 
         #region Performance
@@ -335,20 +506,49 @@ namespace EZhex1991.EZSoftBone
         public Transform simulateSpace { get { return m_SimulateSpace; } set { m_SimulateSpace = value; } }
         #endregion
 
+        #region Render Pose Latch
+
+        [SerializeField]
+        private bool m_RenderPoseLatch = true;
+
+        public bool renderPoseLatch
+        {
+            get { return m_RenderPoseLatch; }
+            set { m_RenderPoseLatch = value; }
+        }
+
+        private bool m_HasSolvedPose;
+        private int m_RenderLatchDepth;
+
+        #endregion
+
         public float globalRadius { get; private set; }
         public Vector3 globalForce { get; private set; }
 
         public CustomForce customForce;
 
         private List<Bone> m_Structures = new List<Bone>();
+        private Collider[] m_NativeColliderBuffer = new Collider[64];
+
+        //private void OnCameraPreCull(Camera camera)
+        //{
+        //    ApplyCachedSolvedTransforms();
+        //}
 
         private void Awake()
         {
+            //Techwoof: Let's change default assets to VAM's layers
+            EnsureRequiredCollisionLayers();
+            EnsureNativeColliderBuffer();
             InitStructures();
         }
         private void OnEnable()
         {
             SetRestState();
+            Camera.onPreCull += OnCameraPreCull;
+
+            // Gives the latch a valid initial pose before the first LateUpdate.
+            CacheSolvedTransforms();
         }
         private void Update()
         {
@@ -356,6 +556,9 @@ namespace EZhex1991.EZSoftBone
         }
         private void LateUpdate()
         {
+            //RevertTransforms(startDepth);
+
+            SyncNativeColliderTransforms();
             switch (deltaTimeMode)
             {
                 case DeltaTimeMode.DeltaTime:
@@ -369,10 +572,19 @@ namespace EZhex1991.EZSoftBone
                     break;
             }
             UpdateTransforms();
+           
         }
         private void OnDisable()
         {
+            ForceReleaseRenderPoseLatch();
+            UnregisterRenderPoseCallbacks();
             RevertTransforms(startDepth);
+        }
+
+        private void OnDestroy()
+        {
+            ForceReleaseRenderPoseLatch();
+            UnregisterRenderPoseCallbacks();
         }
 
 #if UNITY_EDITOR
@@ -383,6 +595,18 @@ namespace EZhex1991.EZSoftBone
             m_Iterations = Mathf.Max(1, m_Iterations);
             m_SleepThreshold = Mathf.Max(0, m_SleepThreshold);
             m_Radius = Mathf.Max(0, m_Radius);
+            m_NativeColliderBufferSize = Mathf.Clamp(m_NativeColliderBufferSize, 1, 256);
+            EnsureRequiredCollisionLayers(); //Techwoof: Add VAMs default layers
+            EnsureNativeColliderBuffer();
+            m_CollisionFeedback = Mathf.Clamp01(m_CollisionFeedback);
+            m_CollisionFeedbackFalloff = Mathf.Clamp01(m_CollisionFeedbackFalloff);
+            m_CollisionFeedbackDepth = Mathf.Max(0, m_CollisionFeedbackDepth);
+            m_BackwardConstraintStrength = Mathf.Clamp01(m_BackwardConstraintStrength);
+            m_BackwardConstraintPasses = Mathf.Max(0, m_BackwardConstraintPasses);
+            m_ChildOrientationFollow = Mathf.Clamp01(m_ChildOrientationFollow);
+            m_CollisionChildOrientationFollow = Mathf.Clamp01(m_CollisionChildOrientationFollow);
+            m_CollisionChildOrientationFalloff = Mathf.Clamp01(m_CollisionChildOrientationFalloff);
+            m_CollisionChildOrientationDepth = Mathf.Max(0, m_CollisionChildOrientationDepth);
         }
         private void OnDrawGizmosSelected()
         {
@@ -413,7 +637,7 @@ namespace EZhex1991.EZSoftBone
             Gizmos.color = Color.Lerp(Color.white, Color.red, bone.normalizedLength);
             if (bone.parentBone != null)
                 Gizmos.DrawLine(bone.worldPosition, bone.parentBone.worldPosition);
-            if (bone.depth > startDepth)
+            if (bone.depth > startDepth && (!m_UseCompoundBoneColliders || !HasActiveCollisionProxies(bone)))
                 Gizmos.DrawWireSphere(bone.worldPosition, bone.radius);
             if (siblingConstraints != UnificationMode.None)
             {
@@ -556,6 +780,20 @@ namespace EZhex1991.EZSoftBone
             }
         }
 
+        public void RefreshCollisionProxies()
+        {
+            if (m_Structures.Count == 0)
+            {
+                InitStructures();
+                return;
+            }
+
+            for (int i = 0; i < m_Structures.Count; i++)
+            {
+                m_Structures[i].RefreshCollisionProxies();
+            }
+        }
+
         private void UpdateStructures(float deltaTime)
         {
             if (deltaTime <= DeltaTime_Min) return;
@@ -586,6 +824,14 @@ namespace EZhex1991.EZSoftBone
                 for (int j = 0; j < m_Structures.Count; j++)
                 {
                     UpdateBones(m_Structures[j], deltaTime);
+                }
+
+                for (int pass = 0; pass < m_BackwardConstraintPasses; pass++)
+                {
+                    for (int j = 0; j < m_Structures.Count; j++)
+                    {
+                        SolveBackwardConstraints(m_Structures[j], deltaTime);
+                    }
                 }
             }
         }
@@ -619,8 +865,11 @@ namespace EZhex1991.EZSoftBone
                 }
 
                 // Stiffness (shape keeper)
-                Vector3 parentMovement = bone.parentBone.worldPosition - bone.parentBone.transform.position;
-                expectedPosition = bone.parentBone.transform.TransformPoint(bone.localPosition) + parentMovement;
+                // Techwfoof: Original EZSoftBone used the parent's rest Transform as the stiffness target.
+                // That works for very soft chains, but rigid chains can keep aiming at the original rest pose
+                // after a collision bends an upstream segment. Blend toward the simulated parent-segment
+                // orientation so child bones inherit the collided bone's direction.
+                expectedPosition = GetStiffnessExpectedPosition(bone);
                 newWorldPosition = Vector3.Lerp(newWorldPosition, expectedPosition, bone.stiffness / iterations);
 
                 // Slackness (length keeper)
@@ -651,19 +900,7 @@ namespace EZhex1991.EZSoftBone
                 newWorldPosition = Vector3.Lerp(expectedPosition, newWorldPosition, bone.slackness / iterations);
 
                 // Collision
-                if (bone.radius > 0)
-                {
-                    foreach (EZSoftBoneColliderBase collider in EZSoftBoneColliderBase.EnabledColliders)
-                    {
-                        if (bone.transform != collider.transform && collisionLayers.Contains(collider.gameObject.layer))
-                            collider.Collide(ref newWorldPosition, bone.radius);
-                    }
-                    foreach (Collider collider in extraColliders)
-                    {
-                        if (bone.transform != collider.transform && collider.enabled)
-                            EZSoftBoneUtility.PointOutsideCollider(ref newWorldPosition, collider, bone.radius);
-                    }
-                }
+                ResolveCollision(bone, ref newWorldPosition, deltaTime);
 
                 bone.speed = (bone.speed + (newWorldPosition - oldWorldPosition) / deltaTime) * 0.5f;
                 bone.worldPosition = newWorldPosition;
@@ -678,11 +915,557 @@ namespace EZhex1991.EZSoftBone
                 UpdateBones(bone.childBones[i], deltaTime);
             }
         }
+
+        private void ResolveCollision(Bone bone, ref Vector3 newWorldPosition, float deltaTime)
+        {
+            bool useCompound = m_UseCompoundBoneColliders && HasActiveCollisionProxies(bone);
+            if (!useCompound && bone.radius <= 0f) return;
+
+            Vector3 positionBeforeCollision = newWorldPosition;
+
+            if (useCompound)
+            {
+                ResolveCompoundCollision(bone, ref newWorldPosition);
+            }
+            else
+            {
+                ResolveCollisionPoint(bone, ref newWorldPosition, bone.radius);
+            }
+
+            Vector3 collisionCorrection = newWorldPosition - positionBeforeCollision;
+            if (collisionCorrection.sqrMagnitude <= 1e-10f) return;
+
+            // Rotate descendants while the parent is still at its pre-feedback position.
+            ApplyCollisionOrientationToChildren(bone, positionBeforeCollision, newWorldPosition, deltaTime);
+            ApplyCollisionFeedbackToParents(bone, collisionCorrection, deltaTime);
+        }
+
+        private bool HasActiveCollisionProxies(Bone bone)
+        {
+            if (bone == null || bone.collisionProxies == null) return false;
+
+            for (int i = 0; i < bone.collisionProxies.Length; i++)
+            {
+                EZSoftBoneBoneCollider proxy = bone.collisionProxies[i];
+                if (proxy == null) continue;
+                if (!proxy.enabled || !proxy.gameObject.activeInHierarchy) continue;
+                if (proxy.radius <= 0f || proxy.weight <= 0f) continue;
+                return true;
+            }
+
+            return false;
+        }
+
+        private void ResolveCompoundCollision(Bone bone, ref Vector3 newWorldPosition)
+        {
+            EZSoftBoneBoneCollider[] proxies = bone.collisionProxies;
+            if (proxies == null || proxies.Length == 0) return;
+
+            Vector3 candidateBonePosition = newWorldPosition;
+
+            for (int proxyIndex = 0; proxyIndex < proxies.Length; proxyIndex++)
+            {
+                EZSoftBoneBoneCollider proxy = proxies[proxyIndex];
+                if (proxy == null) continue;
+                if (!proxy.enabled || !proxy.gameObject.activeInHierarchy) continue;
+                if (proxy.radius <= 0f || proxy.weight <= 0f) continue;
+
+                int sampleCount = proxy.shape == EZSoftBoneBoneCollider.Shape.Capsule
+                    ? Mathf.Max(2, proxy.capsuleSamples)
+                    : 1;
+
+                for (int sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
+                {
+                    float sampleT = sampleCount <= 1 ? 0.5f : sampleIndex / (float)(sampleCount - 1);
+                    float sampleRadius;
+                    Vector3 samplePosition = GetProxySamplePosition(
+                        bone,
+                        proxy,
+                        candidateBonePosition,
+                        sampleT,
+                        out sampleRadius);
+
+                    if (sampleRadius <= 0f) continue;
+
+                    Vector3 resolvedPosition = samplePosition;
+                    ResolveCollisionPoint(bone, ref resolvedPosition, sampleRadius);
+
+                    Vector3 correction = (resolvedPosition - samplePosition) * proxy.weight;
+                    if (correction.sqrMagnitude <= 1e-10f) continue;
+
+                    // Sequential projection keeps all proxies attached to the same simulated bone
+                    // and lets later samples account for corrections already produced this frame.
+                    candidateBonePosition += correction;
+                }
+            }
+
+            newWorldPosition = candidateBonePosition;
+        }
+
+        private Vector3 GetProxySamplePosition(
+            Bone bone,
+            EZSoftBoneBoneCollider proxy,
+            Vector3 candidateBonePosition,
+            float sampleT,
+            out float worldRadius)
+        {
+            Quaternion simulationDelta = GetBoneSimulationDelta(bone, candidateBonePosition);
+            Vector3 centerOffset = simulationDelta * bone.transform.TransformVector(proxy.localCenter);
+            Vector3 center = candidateBonePosition + centerOffset;
+
+            float maxScale = bone.transform.lossyScale.Abs().Max();
+            worldRadius = Mathf.Max(0f, proxy.radius) * maxScale;
+
+            if (proxy.shape != EZSoftBoneBoneCollider.Shape.Capsule)
+                return center;
+
+            Vector3 axis = GetProxyWorldAxis(bone, proxy, candidateBonePosition, simulationDelta);
+            if (axis.sqrMagnitude <= 1e-10f)
+                axis = Vector3.up;
+            else
+                axis.Normalize();
+
+            float worldHeight = Mathf.Max(proxy.height * maxScale, worldRadius * 2f);
+            float halfLineLength = Mathf.Max(0f, worldHeight * 0.5f - worldRadius);
+
+            Vector3 endpoint0 = center - axis * halfLineLength;
+            Vector3 endpoint1 = center + axis * halfLineLength;
+            return Vector3.Lerp(endpoint0, endpoint1, Mathf.Clamp01(sampleT));
+        }
+
+        private Quaternion GetBoneSimulationDelta(Bone bone, Vector3 candidateBonePosition)
+        {
+            if (bone == null || bone.parentBone == null)
+                return Quaternion.identity;
+
+            Vector3 restDirection = bone.parentBone.transform.TransformVector(bone.localPosition);
+            Vector3 simulatedDirection = candidateBonePosition - bone.parentBone.worldPosition;
+
+            if (restDirection.sqrMagnitude <= 1e-10f || simulatedDirection.sqrMagnitude <= 1e-10f)
+                return Quaternion.identity;
+
+            return Quaternion.FromToRotation(restDirection, simulatedDirection);
+        }
+
+        private Vector3 GetProxyWorldAxis(
+            Bone bone,
+            EZSoftBoneBoneCollider proxy,
+            Vector3 candidateBonePosition,
+            Quaternion simulationDelta)
+        {
+            if (proxy.axis == EZSoftBoneBoneCollider.Axis.AutoBone)
+            {
+                // Prefer the bone-to-child direction because that is the visual direction of
+                // most imported bone chains. Fall back to parent-to-bone for terminal bones.
+                if (bone.childBones.Count > 0)
+                {
+                    Vector3 childDirection = bone.childBones[0].worldPosition - candidateBonePosition;
+                    if (childDirection.sqrMagnitude > 1e-10f)
+                        return childDirection.normalized;
+                }
+
+                if (bone.parentBone != null)
+                {
+                    Vector3 parentDirection = candidateBonePosition - bone.parentBone.worldPosition;
+                    if (parentDirection.sqrMagnitude > 1e-10f)
+                        return parentDirection.normalized;
+                }
+
+                return simulationDelta * bone.transform.up;
+            }
+
+            Vector3 localAxis;
+            switch (proxy.axis)
+            {
+                case EZSoftBoneBoneCollider.Axis.X:
+                    localAxis = Vector3.right;
+                    break;
+                case EZSoftBoneBoneCollider.Axis.Z:
+                    localAxis = Vector3.forward;
+                    break;
+                default:
+                    localAxis = Vector3.up;
+                    break;
+            }
+
+            return simulationDelta * bone.transform.TransformDirection(localAxis);
+        }
+
+        private void ResolveCollisionPoint(Bone bone, ref Vector3 position, float spacing)
+        {
+            if (spacing <= 0f) return;
+
+            foreach (EZSoftBoneColliderBase collider in EZSoftBoneColliderBase.EnabledColliders)
+            {
+                if (collider == null || !collider.isActiveAndEnabled) continue;
+                if (bone.transform == collider.transform) continue;
+                if (!collisionLayers.Contains(collider.gameObject.layer)) continue;
+
+                collider.Collide(ref position, spacing);
+            }
+
+            if (extraColliders != null)
+            {
+                for (int i = 0; i < extraColliders.Count; i++)
+                {
+                    Collider collider = extraColliders[i];
+                    if (collider == null || !collider.enabled) continue;
+                    if (bone.transform == collider.transform) continue;
+
+                    EZSoftBoneUtility.PointOutsideCollider(ref position, collider, spacing);
+                }
+            }
+
+            ResolveNativeColliderCollision(bone, ref position, spacing);
+        }
+
+        private void ResolveNativeColliderCollision(Bone bone, ref Vector3 position, float spacing)
+        {
+            if (!m_CollideWithNativeColliders) return;
+            if (spacing <= 0f) return;
+
+            EnsureNativeColliderBuffer();
+
+            int hitCount = Physics.OverlapSphereNonAlloc(
+                position,
+                spacing,
+                m_NativeColliderBuffer,
+                collisionLayers,
+                QueryTriggerInteraction.Ignore);
+
+            for (int i = 0; i < hitCount; i++)
+            {
+                Collider collider = m_NativeColliderBuffer[i];
+
+                if (collider == null) continue;
+                if (!collider.enabled || collider.isTrigger) continue;
+                if (bone.transform == collider.transform) continue;
+                if (extraColliders != null && extraColliders.Contains(collider)) continue;
+
+                //EZSoftBoneUtility.PointOutsideCollider(ref position, collider, spacing);
+                ResolveNativeColliderPoint(ref position, collider, spacing);
+            }
+
+            for (int i = 0; i < hitCount; i++)
+            {
+                m_NativeColliderBuffer[i] = null;
+            }
+        }
+
+        private void EnsureNativeColliderBuffer()
+        {
+            int requiredSize = Mathf.Clamp(m_NativeColliderBufferSize, 1, 256);
+            if (m_NativeColliderBuffer == null || m_NativeColliderBuffer.Length != requiredSize)
+            {
+                m_NativeColliderBuffer = new Collider[requiredSize];
+            }
+        }
+
+        private void EnsureRequiredCollisionLayers()
+        {
+            // Upgrade untouched legacy components without overwriting custom masks.
+            if (m_CollisionLayers.value == LegacyDefaultCollisionMask)
+            {
+                m_CollisionLayers = DefaultCollisionMask;
+            }
+        }
+
+        private Vector3 GetStiffnessExpectedPosition(Bone bone)
+        {
+            Bone parent = bone.parentBone;
+
+            Vector3 parentMovement = parent.worldPosition - parent.transform.position;
+            Vector3 restExpectedPosition = parent.transform.TransformPoint(bone.localPosition) + parentMovement;
+
+            if (m_ChildOrientationFollow <= 0f)
+                return restExpectedPosition;
+
+            if (parent.parentBone == null)
+                return restExpectedPosition;
+
+            Vector3 parentRestDirection = parent.parentBone.transform.TransformVector(parent.localPosition);
+            Vector3 parentCurrentDirection = parent.worldPosition - parent.parentBone.worldPosition;
+
+            if (parentRestDirection.sqrMagnitude <= 1e-10f || parentCurrentDirection.sqrMagnitude <= 1e-10f)
+                return restExpectedPosition;
+
+            Quaternion parentRotationDelta = Quaternion.FromToRotation(parentRestDirection, parentCurrentDirection);
+            Vector3 childRestOffset = parent.transform.TransformVector(bone.localPosition);
+            Vector3 inheritedExpectedPosition = parent.worldPosition + parentRotationDelta * childRestOffset;
+
+            return Vector3.Lerp(restExpectedPosition, inheritedExpectedPosition, m_ChildOrientationFollow);
+        }
+
+        private void ApplyCollisionFeedbackToParents(Bone bone, Vector3 correction, float deltaTime)
+        {
+            if (correction.sqrMagnitude < 1e-10f) return;
+            if (m_CollisionFeedback <= 0f || m_CollisionFeedbackDepth <= 0) return;
+
+            Bone parent = bone.parentBone;
+            float weight = m_CollisionFeedback;
+            int depth = 0;
+
+            while (parent != null && parent.depth > startDepth && depth < m_CollisionFeedbackDepth)
+            {
+                Vector3 parentCorrection = correction * weight;
+                parent.worldPosition += parentCorrection;
+
+                if (deltaTime > DeltaTime_Min)
+                {
+                    parent.speed += parentCorrection / deltaTime;
+                }
+
+                weight *= m_CollisionFeedbackFalloff;
+                parent = parent.parentBone;
+                depth++;
+            }
+        }
+
+        private void ApplyCollisionOrientationToChildren(Bone bone, Vector3 positionBeforeCollision, Vector3 positionAfterCollision, float deltaTime)
+        {
+            if (m_CollisionChildOrientationFollow <= 0f) return;
+            if (m_CollisionChildOrientationDepth <= 0) return;
+            if (bone.parentBone == null) return;
+            if (bone.childBones.Count == 0) return;
+
+            Vector3 oldSegment = positionBeforeCollision - bone.parentBone.worldPosition;
+            Vector3 newSegment = positionAfterCollision - bone.parentBone.worldPosition;
+
+            if (oldSegment.sqrMagnitude <= 1e-10f || newSegment.sqrMagnitude <= 1e-10f) return;
+
+            Quaternion collisionRotationDelta = Quaternion.FromToRotation(oldSegment, newSegment);
+
+            for (int i = 0; i < bone.childBones.Count; i++)
+            {
+                ApplyCollisionOrientationToChildRecursive(
+                    bone.childBones[i],
+                    positionBeforeCollision,
+                    positionAfterCollision,
+                    collisionRotationDelta,
+                    m_CollisionChildOrientationFollow,
+                    0,
+                    deltaTime);
+            }
+        }
+
+        private void ApplyCollisionOrientationToChildRecursive(Bone child, Vector3 oldPivot, Vector3 newPivot, Quaternion rotationDelta, float weight, int depth, float deltaTime)
+        {
+            if (child == null) return;
+            if (weight <= 0f) return;
+            if (depth >= m_CollisionChildOrientationDepth) return;
+
+            Vector3 desiredPosition = newPivot + rotationDelta * (child.worldPosition - oldPivot);
+            Vector3 correction = (desiredPosition - child.worldPosition) * weight;
+
+            child.worldPosition += correction;
+
+            if (deltaTime > DeltaTime_Min)
+            {
+                child.speed += correction / deltaTime;
+            }
+
+            float childWeight = weight * m_CollisionChildOrientationFalloff;
+            for (int i = 0; i < child.childBones.Count; i++)
+            {
+                ApplyCollisionOrientationToChildRecursive(child.childBones[i], oldPivot, newPivot, rotationDelta, childWeight, depth + 1, deltaTime);
+            }
+        }
+
+        private void SolveBackwardConstraints(Bone bone, float deltaTime)
+        {
+            for (int i = 0; i < bone.childBones.Count; i++)
+            {
+                SolveBackwardConstraints(bone.childBones[i], deltaTime);
+            }
+
+            if (m_BackwardConstraintStrength <= 0f) return;
+            if (bone.parentBone == null) return;
+            if (bone.parentBone.depth <= startDepth) return;
+
+            Bone parent = bone.parentBone;
+            Vector3 parentToChild = bone.worldPosition - parent.worldPosition;
+            float currentLength = parentToChild.magnitude;
+            if (currentLength <= 1e-6f) return;
+
+            float restLength = parent.transform.TransformVector(bone.localPosition).magnitude;
+            Vector3 desiredParentPosition = bone.worldPosition - parentToChild / currentLength * restLength;
+            Vector3 correction = (desiredParentPosition - parent.worldPosition) * m_BackwardConstraintStrength;
+
+            parent.worldPosition += correction;
+
+            if (deltaTime > DeltaTime_Min)
+            {
+                parent.speed += correction / deltaTime;
+            }
+        }
+
         private void UpdateTransforms()
         {
             for (int i = 0; i < m_Structures.Count; i++)
             {
                 m_Structures[i].UpdateTransform(siblingRotationConstraints, startDepth);
+            }
+            CacheSolvedTransforms();
+        }
+
+        private static void ResolveNativeColliderPoint(ref Vector3 position, Collider collider, float spacing)
+        {
+            SphereCollider sphereCollider = collider as SphereCollider;
+            if (sphereCollider != null)
+            {
+                EZSoftBoneUtility.PointOutsideSphere(
+                    ref position,
+                    sphereCollider,
+                    spacing);
+
+                return;
+            }
+
+            CapsuleCollider capsuleCollider = collider as CapsuleCollider;
+            if (capsuleCollider != null)
+            {
+                EZSoftBoneUtility.PointOutsideCapsule(
+                    ref position,
+                    capsuleCollider,
+                    spacing);
+
+                return;
+            }
+
+            BoxCollider boxCollider = collider as BoxCollider;
+            if (boxCollider != null)
+            {
+                EZSoftBoneUtility.PointOutsideBox(
+                    ref position,
+                    boxCollider,
+                    spacing);
+
+                return;
+            }
+
+            // MeshCollider and other unsupported collider types.
+            EZSoftBoneUtility.PointOutsideCollider(
+                ref position,
+                collider,
+                spacing);
+        }
+
+        private void SyncNativeColliderTransforms()
+        {
+            if (!m_CollideWithNativeColliders)
+                return;
+
+            if (!m_SyncNativeColliderTransforms)
+                return;
+
+            if (s_LastPhysicsSyncFrame == Time.frameCount)
+                return;
+
+            Physics.SyncTransforms();
+            s_LastPhysicsSyncFrame = Time.frameCount;
+        }
+
+        private void CacheSolvedTransforms()
+        {
+            m_HasSolvedPose = false;
+
+            for (int i = 0; i < m_Structures.Count; i++)
+            {
+                if (m_Structures[i].CacheSolvedPose(startDepth))
+                {
+                    m_HasSolvedPose = true;
+                }
+            }
+        }
+
+        private void BackupRenderTransforms()
+        {
+            for (int i = 0; i < m_Structures.Count; i++)
+            {
+                m_Structures[i].BackupRenderPose(startDepth);
+            }
+        }
+
+        private void ApplySolvedRenderTransforms()
+        {
+            for (int i = 0; i < m_Structures.Count; i++)
+            {
+                m_Structures[i].ApplySolvedPose(startDepth);
+            }
+        }
+
+        private void RestoreRenderTransforms()
+        {
+            for (int i = 0; i < m_Structures.Count; i++)
+            {
+                m_Structures[i].RestoreRenderPose(startDepth);
+            }
+        }
+        private void RegisterRenderPoseCallbacks()
+        {
+            // Remove first to prevent accidental duplicate registration.
+            Camera.onPreCull -= OnCameraPreCull;
+            Camera.onPreRender -= OnCameraPreRender;
+            Camera.onPostRender -= OnCameraPostRender;
+
+            Camera.onPreCull += OnCameraPreCull;
+            Camera.onPreRender += OnCameraPreRender;
+            Camera.onPostRender += OnCameraPostRender;
+        }
+
+        private void UnregisterRenderPoseCallbacks()
+        {
+            Camera.onPreCull -= OnCameraPreCull;
+            Camera.onPreRender -= OnCameraPreRender;
+            Camera.onPostRender -= OnCameraPostRender;
+        }
+        private void OnCameraPreCull(Camera camera)
+        {
+            if (!m_RenderPoseLatch) return;
+            if (!isActiveAndEnabled) return;
+            if (!m_HasSolvedPose) return;
+
+            // Only save the normal simulation pose once.
+            // Nested cameras should not overwrite the original backup.
+            if (m_RenderLatchDepth == 0)
+            {
+                BackupRenderTransforms();
+            }
+
+            m_RenderLatchDepth++;
+
+            // Apply the last fully solved pose before camera culling.
+            ApplySolvedRenderTransforms();
+        }
+
+        private void OnCameraPreRender(Camera camera)
+        {
+            if (m_RenderLatchDepth <= 0) return;
+
+            // Reapply in case another callback changed the transforms
+            // between camera culling and rendering.
+            ApplySolvedRenderTransforms();
+        }
+
+        private void OnCameraPostRender(Camera camera)
+        {
+            if (m_RenderLatchDepth <= 0) return;
+
+            m_RenderLatchDepth--;
+
+            // Restore only after the outermost camera has finished.
+            if (m_RenderLatchDepth == 0)
+            {
+                RestoreRenderTransforms();
+            }
+        }
+
+        private void ForceReleaseRenderPoseLatch()
+        {
+            if (m_RenderLatchDepth > 0)
+            {
+                m_RenderLatchDepth = 0;
+                RestoreRenderTransforms();
             }
         }
     }

@@ -6,7 +6,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace EZhex1991.EZSoftBone
+namespace VAMEZSoftBones
 {
     [CustomEditor(typeof(EZSoftBoneForce))]
     public class EZSoftBoneForceEditor : Editor
@@ -25,16 +25,16 @@ namespace EZhex1991.EZSoftBone
 
         private void OnEnable()
         {
-            m_Force = serializedObject.FindProperty(nameof(m_Force));
-            m_Turbulence = serializedObject.FindProperty(nameof(m_Turbulence));
-            m_TurbulenceMode = serializedObject.FindProperty(nameof(m_TurbulenceMode));
+            m_Force = serializedObject.FindProperty("m_Force");
+            m_Turbulence = serializedObject.FindProperty("m_Turbulence");
+            m_TurbulenceMode = serializedObject.FindProperty("m_TurbulenceMode");
 
-            m_Frequency = serializedObject.FindProperty(nameof(m_Frequency));
+            m_Frequency = serializedObject.FindProperty("m_Frequency");
 
-            m_TimeCycle = serializedObject.FindProperty(nameof(m_TimeCycle));
-            m_CurveX = serializedObject.FindProperty(nameof(m_CurveX));
-            m_CurveY = serializedObject.FindProperty(nameof(m_CurveY));
-            m_CurveZ = serializedObject.FindProperty(nameof(m_CurveZ));
+            m_TimeCycle = serializedObject.FindProperty("m_TimeCycle");
+            m_CurveX = serializedObject.FindProperty("m_CurveX");
+            m_CurveY = serializedObject.FindProperty("m_CurveY");
+            m_CurveZ = serializedObject.FindProperty("m_CurveZ");
         }
 
         public override void OnInspectorGUI()

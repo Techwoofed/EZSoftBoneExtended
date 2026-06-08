@@ -5,7 +5,7 @@
  */
 using UnityEngine;
 
-namespace EZhex1991.EZSoftBone
+namespace VAMEZSoftBones
 {
     [CreateAssetMenu(fileName = "SBForce", menuName = "EZSoftBone/SBForce")]
     public class EZSoftBoneForce : ScriptableObject

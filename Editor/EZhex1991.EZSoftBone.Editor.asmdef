@@ -1,7 +1,7 @@
 {
-    "name": "EZhex1991.EZSoftBone.Editor",
+    "name": "VAMEZSoftBones.Editor",
     "references": [
-        "EZhex1991.EZSoftBone"
+        "VAMEZSoftBones"
     ],
     "includePlatforms": [
         "Editor"

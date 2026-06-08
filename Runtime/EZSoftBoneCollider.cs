@@ -5,7 +5,7 @@
  */
 using UnityEngine;
 
-namespace EZhex1991.EZSoftBone
+namespace VAMEZSoftBones
 {
     [RequireComponent(typeof(Collider))]
     public class EZSoftBoneCollider : EZSoftBoneColliderBase

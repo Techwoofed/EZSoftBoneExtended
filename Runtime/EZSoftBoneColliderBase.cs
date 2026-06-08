@@ -6,7 +6,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace EZhex1991.EZSoftBone
+namespace VAMEZSoftBones
 {
     public abstract class EZSoftBoneColliderBase : MonoBehaviour
     {

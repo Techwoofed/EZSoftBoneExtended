@@ -6,7 +6,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace EZhex1991.EZSoftBone
+namespace VAMEZSoftBones
 {
     [CustomPropertyDrawer(typeof(EZSoftBoneMaterial))]
     public class EZSoftBoneMaterialDrawer : PropertyDrawer
