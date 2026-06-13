@@ -55,6 +55,8 @@ namespace VAMEZSoftBones
 
         private SerializedProperty m_SimulateSpace;
 
+        private SerializedProperty m_RenderPoseLatch;
+
         private void OnEnable()
         {
             softBone = target as EZSoftBone;
@@ -99,6 +101,8 @@ namespace VAMEZSoftBones
             m_ForceScale = serializedObject.FindProperty("m_ForceScale");
 
             m_SimulateSpace = serializedObject.FindProperty("m_SimulateSpace");
+
+            m_RenderPoseLatch = serializedObject.FindProperty("m_RenderPoseLatch");
         }
 
         private void DrawRootBonesElement(Rect rect, int index, bool isActive, bool isFocused)
@@ -216,6 +220,10 @@ namespace VAMEZSoftBones
             }
             EditorGUILayout.PropertyField(m_Iterations);
             EditorGUILayout.PropertyField(m_SleepThreshold);
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Experimental (VAM)", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(m_RenderPoseLatch, new GUIContent("Render Pose Latch", "Temporarily reapplies the last solved bone pose while each camera renders, preventing the rest pose from being displayed between Update and LateUpdate."));
 
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Gravity", EditorStyles.boldLabel);

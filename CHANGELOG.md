@@ -39,12 +39,12 @@
 - Changed the way updates are calculated (NASTY!!) to work around some VAM limitations and avoid EZSB physics flickering in high-load scenarios against native colliders.
 	- Using a temporary render-only pose latch we keep the `RevertTransforms()` in `Update()`, cache the solved local pose after `LateUpdate()`, immediately before a camera renders temporarily apply the cached solved pose, and then after that camera finishes rendering, restore whatever pose was present before rendering. Immediately after that camera finishes rendering, restore whatever pose was present before rendering. I know, i'm not proud of this either.
 	- A cleaner way would just be to change the `RevertTransforms()` call to `LateUpdate()` instead of `Update()`, but in doing so we would sacrifice Animator support.
+- Default settings for all new parameters are now zero
+- Added toggle for workaround
+	- In-game tests where successful, no issues found with it ON or OFF, related to other aspects of the game.
+- Cleaned old tests
 
 ### TODO (must be fixed before final submit and review):
-- Fix default settings: Defaults settings are not optimal, change so stuff don't look weird on spawn. Child orientation related settings should be 0 by default.
-- Add toggle for the workaround to be ON or OFF by the Editor.
-- Test if the toggle for the workaround can work in-game without causing issues.
-- Cleanup old tests
 - Make a proper documentation of the new features and behaviors
 
 ### Known issues:

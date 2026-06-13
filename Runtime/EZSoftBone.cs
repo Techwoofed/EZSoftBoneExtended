@@ -395,7 +395,7 @@ namespace VAMEZSoftBones
         public AnimationCurve radiusCurve { get { return m_RadiusCurve; } }
 
         [SerializeField]
-        private bool m_UseCompoundBoneColliders = true;
+        private bool m_UseCompoundBoneColliders = false;
         public bool useCompoundBoneColliders { get { return m_UseCompoundBoneColliders; } set { m_UseCompoundBoneColliders = value; } }
 
         [SerializeField]
@@ -414,14 +414,14 @@ namespace VAMEZSoftBones
             }
         }
 
-        [SerializeField, Range(0f, 0.01f)]
+        /*[SerializeField, Range(0f, 0.01f)]
         private float m_NativeCollisionSkin = 0.001f;
 
         public float nativeCollisionSkin
         {
             get { return m_NativeCollisionSkin; }
             set { m_NativeCollisionSkin = Mathf.Max(0f, value); }
-        }
+        }*/
 
         [SerializeField]
         private bool m_SyncNativeColliderTransforms = true;
@@ -429,11 +429,11 @@ namespace VAMEZSoftBones
         private static int s_LastPhysicsSyncFrame = -1;
 
         [SerializeField, Range(0f, 1f)]
-        private float m_CollisionFeedback = 0.35f;
+        private float m_CollisionFeedback = 0f;
         public float collisionFeedback { get { return m_CollisionFeedback; } set { m_CollisionFeedback = Mathf.Clamp01(value); } }
 
         [SerializeField, Range(0f, 1f)]
-        private float m_CollisionFeedbackFalloff = 0.55f;
+        private float m_CollisionFeedbackFalloff = 0f;
         public float collisionFeedbackFalloff { get { return m_CollisionFeedbackFalloff; } set { m_CollisionFeedbackFalloff = Mathf.Clamp01(value); } }
 
         [SerializeField, Range(0, 8)]
@@ -441,23 +441,23 @@ namespace VAMEZSoftBones
         public int collisionFeedbackDepth { get { return m_CollisionFeedbackDepth; } set { m_CollisionFeedbackDepth = Mathf.Max(0, value); } }
 
         [SerializeField, Range(0f, 1f)]
-        private float m_BackwardConstraintStrength = 0.35f;
+        private float m_BackwardConstraintStrength = 0;
         public float backwardConstraintStrength { get { return m_BackwardConstraintStrength; } set { m_BackwardConstraintStrength = Mathf.Clamp01(value); } }
 
         [SerializeField, Range(0, 4)]
-        private int m_BackwardConstraintPasses = 1;
+        private int m_BackwardConstraintPasses = 0;
         public int backwardConstraintPasses { get { return m_BackwardConstraintPasses; } set { m_BackwardConstraintPasses = Mathf.Max(0, value); } }
 
         [SerializeField, Range(0f, 1f)]
-        private float m_ChildOrientationFollow = 0.75f;
+        private float m_ChildOrientationFollow = 0f;
         public float childOrientationFollow { get { return m_ChildOrientationFollow; } set { m_ChildOrientationFollow = Mathf.Clamp01(value); } }
 
         [SerializeField, Range(0f, 1f)]
-        private float m_CollisionChildOrientationFollow = 0.75f;
+        private float m_CollisionChildOrientationFollow = 0f;
         public float collisionChildOrientationFollow { get { return m_CollisionChildOrientationFollow; } set { m_CollisionChildOrientationFollow = Mathf.Clamp01(value); } }
 
         [SerializeField, Range(0f, 1f)]
-        private float m_CollisionChildOrientationFalloff = 0.9f;
+        private float m_CollisionChildOrientationFalloff = 0f;
         public float collisionChildOrientationFalloff { get { return m_CollisionChildOrientationFalloff; } set { m_CollisionChildOrientationFalloff = Mathf.Clamp01(value); } }
 
         [SerializeField, Range(0, 16)]
